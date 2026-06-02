@@ -1,10 +1,12 @@
 // Health check: verify the SDK loads, report platform support, list available identity profiles,
-// and try a trivial sandboxed command in a THROWAWAY temp dir (repo-agnostic — this never reports
-// any real repo as writable). Run: node selftest.mjs
+// and probe whether this host can actually EXECUTE the sandbox. Repo-agnostic — the execution
+// probe runs in a throwaway temp dir, so it never reports a real repo as writable.
 //
-// Exit code is always 0 when the server itself is healthy. A host that can't execute the sandbox
-// (missing backend support) is reported as a WARNING, not a failure — the MCP server still works
-// and run_in_sandbox will surface the same reason to the agent.
+// On Windows there are two selectable containment backends; this check tries each, and if one
+// works it PERSISTS that choice to ~/.mxc/config.json so the MCP server uses it automatically.
+//
+// Exit code is always 0 when the server itself is healthy. A host with no working backend is a
+// known capability limitation (not an install error) and is reported as such, with guidance.
 
 import os from "node:os";
 import fs from "node:fs";
@@ -15,6 +17,8 @@ import {
   buildPolicyFromProfile,
   builtinDefaultProfile,
   listProfiles,
+  candidateSchemaVersions,
+  saveInstallConfig,
 } from "./policy.mjs";
 import { runSandboxed, platformSupport } from "./mxc.mjs";
 
@@ -28,7 +32,7 @@ const cyan = (s) => c("36", s);
 const dim = (s) => c("2", s);
 
 const ok = (m) => console.log(`  ${green("[ok]")}   ${m}`);
-const warn = (m) => console.log(`  ${yellow("[warn]")} ${m}`);
+const note = (m) => console.log(`  ${cyan("[info]")} ${m}`);
 const info = (m) => console.log(dim(`  ${m}`));
 
 // MXC backend errors append a JSON blob after a human sentence; keep just the sentence.
@@ -38,7 +42,14 @@ function cleanReason(stderr) {
   return text || stderr.trim();
 }
 
-// Profiles live in <install>/profiles after machine setup, or config/profiles in this repo.
+// Map a raw backend failure to a short, human cause (no internal IDs / stack noise).
+function diagnose(reason) {
+  if (/velocity keys/i.test(reason)) return "BaseContainer backend is not enabled on this Windows build";
+  if (/bfscfg\.exe/i.test(reason)) return "AppContainer backend needs bfscfg.exe, which is absent from this Windows build";
+  return reason;
+}
+
+// Profiles live at <install>/profiles after machine setup, or config/profiles in this repo.
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 function findProfilesDir() {
   const candidates = [
@@ -49,7 +60,7 @@ function findProfilesDir() {
   return candidates.find((d) => fs.existsSync(d)) || null;
 }
 
-console.log(bold(cyan("MXC sandbox self-test")));
+console.log(bold(cyan("MXC sandbox health check")));
 
 // 1. SDK + platform
 const support = platformSupport();
@@ -57,26 +68,23 @@ ok(`SDK loaded on ${process.platform}`);
 if (support.isSupported) {
   ok(`MXC available — backends: ${(support.availableMethods || []).join(", ") || "(none)"}`);
 } else {
-  warn(`MXC not available on this host: ${support.reason || "unknown"}`);
+  note(`MXC backend not available on this host: ${support.reason || "unknown"}`);
 }
 
 // 2. Identity profiles
 const profilesDir = findProfilesDir();
 if (profilesDir) {
   const profiles = listProfiles(profilesDir);
-  ok(`identity profiles available: ${profiles.map((p) => p.name).join(", ") || "(none)"}`);
-  info(`profiles dir: ${profilesDir}`);
+  ok(`identity profiles: ${profiles.map((p) => p.name).join(", ") || "(none)"}`);
 } else {
-  warn("no profiles dir found — broker will fall back to the builtin 'default' identity");
+  note("no profiles dir found — broker will fall back to the builtin 'default' identity");
 }
 
-// 3. Policy builds correctly, using a disposable temp dir as a stand-in "repo" so the health
-//    check never lists a real repository as writable.
+// 3. Policy builds correctly, using a disposable temp dir as a stand-in "repo".
 const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mxc-selftest-"));
-const policy = buildPolicyFromProfile({ repoRoot: probeRoot, profile: builtinDefaultProfile() });
-ok("policy built from the 'default' identity (read-anywhere, write-repo-only)");
-info(`probe write root : ${policy.filesystem.readwritePaths[0]}`);
-info(`read scope       : ${policy.filesystem.readonlyPaths.join(", ")}`);
+const baseProfile = builtinDefaultProfile();
+const policy = buildPolicyFromProfile({ repoRoot: probeRoot, profile: baseProfile });
+ok("policy builds from the 'default' identity (read-anywhere, write-repo-only)");
 
 function cleanup() {
   try {
@@ -86,28 +94,53 @@ function cleanup() {
   }
 }
 
-if (!support.isSupported) {
+function done(line) {
   cleanup();
-  console.log("\n" + green(bold("SELF-TEST OK")) + " — server is healthy. (Sandbox execution unavailable on this host.)");
+  console.log("\n" + line);
   process.exit(0);
 }
 
-// 4. Execution probe (inside the disposable temp dir)
+if (!support.isSupported) {
+  done(green(bold("HEALTH CHECK OK")) + " — server is installed and healthy. (Sandbox execution backend unavailable on this host.)");
+}
+
+// 4. Execution probe — try each candidate backend; persist the first that works.
 const cmd = process.platform === "win32" ? "cmd /c echo hello-from-sandbox" : "echo hello-from-sandbox";
-const res = await runSandboxed({ command: cmd, cwd: probeRoot, policy });
-cleanup();
+const candidates = candidateSchemaVersions();
+const attempts = [];
+let working = null;
+
+for (const version of candidates) {
+  const res = await runSandboxed({ command: cmd, cwd: probeRoot, policy: { ...policy, version } });
+  if (res.exitCode === 0) {
+    working = { version, backend: res.backend };
+    break;
+  }
+  attempts.push({ version, reason: diagnose(cleanReason(res.stderr)) });
+}
 
 console.log("");
-if (res.exitCode === 0) {
-  ok(`sandbox executed a command (stdout: "${res.stdout.trim()}")`);
-  console.log("\n" + green(bold("SELF-TEST OK")) + " — server healthy and sandbox execution works.");
-} else {
-  warn("sandbox executed but the host could not run the command:");
-  info(cleanReason(res.stderr));
-  console.log("");
-  console.log(dim("This is a HOST capability gap, not a config error — the MCP server is fine."));
-  console.log(dim("On Windows the sandbox needs one of:"));
-  console.log(dim("  • BaseContainer (default) — velocity keys enabled (Windows 11 24H2+ / provisioned)"));
-  console.log(dim("  • AppContainer            — set MXC_SCHEMA_VERSION=0.4.0-alpha (needs bfscfg.exe)"));
-  console.log("\n" + green(bold("SELF-TEST OK")) + " — server is healthy. Sandbox execution will work on a provisioned host.");
+if (working) {
+  saveInstallConfig({ schemaVersion: working.version });
+  ok(`sandbox execution works (backend: ${working.backend}, schema ${working.version})`);
+  if (candidates.length > 1 && working.version !== candidates[0]) {
+    info(`auto-selected and saved this backend to config.json so the server uses it.`);
+  }
+  done(green(bold("HEALTH CHECK OK")) + " — server healthy and sandbox execution works.");
 }
+
+// No backend could execute. This is a host capability limitation, not an install problem.
+note("sandbox execution is not available on this host yet");
+for (const a of attempts) {
+  info(`• schema ${a.version}: ${a.reason}`);
+}
+console.log("");
+console.log(dim("Your install is complete and the MCP server runs fine — it just can't execute the"));
+console.log(dim("sandbox until the OS provides a containment backend. On Windows you need ONE of:"));
+console.log(dim("  • BaseContainer — a Windows build with the BaseContainer feature enabled"));
+console.log(dim("    (Windows 11 24H2+ / an Insider or provisioned host). Not user-toggleable on"));
+console.log(dim("    a stock build."));
+console.log(dim("  • AppContainer — a Windows build that ships bfscfg.exe (BFS support)."));
+console.log(dim("No reinstall needed: once a backend is present, the server starts using it"));
+console.log(dim("automatically (re-run this check to confirm and persist the choice)."));
+done(yellow(bold("HEALTH CHECK: install OK, execution unavailable on this host")) + dim(" — see guidance above."));

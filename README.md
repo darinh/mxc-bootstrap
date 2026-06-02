@@ -23,6 +23,8 @@ any MCP client** — GitHub Copilot CLI, Claude Code, OpenAI Codex CLI, Cursor, 
 ./scripts/setup.ps1            # Windows
 ./scripts/setup.sh             # Linux / macOS
 
+# open a NEW terminal (setup adds mxc-bootstrap to your PATH), then:
+
 # phase 2 — onboard a repo
 cd ~/work/api
 mxc-bootstrap init
@@ -176,18 +178,22 @@ This is **defense-in-depth**, not a jail. Known, intentional limitations:
 
 ## Host requirements & backends
 
-`run_in_sandbox` needs an OS-level containment backend. The MCP server itself always loads; if the
-host can't execute the sandbox, the tool reports why (and `platform_support` shows what's available).
+`run_in_sandbox` needs an OS-level containment backend. The MCP server itself always loads; the
+machine-setup **health check probes whether this host can execute the sandbox**, and on Windows it
+tries each candidate backend and **persists the first that works** to `~/.mxc/config.json` (so the
+server uses it automatically — no env var needed).
 
 | OS | Backend | Requirement |
 |----|---------|-------------|
-| Windows | BaseContainer (`0.6.0-alpha`) | BaseContainer velocity keys enabled (Windows 11 24H2+ / provisioned host) |
-| Windows | AppContainer (`0.4.0-alpha`) | `bfscfg.exe` / BFS support present in the Windows build |
+| Windows | BaseContainer (`0.6.0-alpha`) | A Windows build with BaseContainer enabled (Windows 11 24H2+ / Insider / provisioned host) — not user-toggleable on a stock build |
+| Windows | AppContainer (`0.4.0-alpha`) | A Windows build that ships `bfscfg.exe` (BFS support) |
 | Linux | bubblewrap | `bwrap` installed (or `lxc`) |
 | macOS | seatbelt | `/usr/bin/sandbox-exec` (built in); runs with the experimental flag |
 
-If the health check reports the server is OK but execution fails (e.g. `E_NOTIMPL` / missing velocity
-keys, or missing `bfscfg.exe`), switch backends with `MXC_SCHEMA_VERSION` or run on a provisioned host.
+If **no** backend works, the health check says so plainly and explains why — your install is still
+complete, and the server starts executing automatically once the OS provides a backend (re-run
+`mxc-bootstrap selftest` to confirm and persist the choice). You can also force a specific schema
+with `MXC_SCHEMA_VERSION`.
 
 ## License
 

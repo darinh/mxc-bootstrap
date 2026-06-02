@@ -14,11 +14,54 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
-// Default policy schema version. This selects the Windows containment backend:
+// The install dir is the parent of mcp/ (e.g. ~/.mxc). Used to read a small persisted config
+// (config.json) that records the containment backend the health check found to work on this host.
+const INSTALL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const DEFAULT_SCHEMA_VERSION = "0.6.0-alpha";
+
+export function installConfigPath(installDir = INSTALL_DIR) {
+  return path.join(installDir, "config.json");
+}
+
+export function loadInstallConfig(installDir = INSTALL_DIR) {
+  try {
+    return JSON.parse(fs.readFileSync(installConfigPath(installDir), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+export function saveInstallConfig(patch, installDir = INSTALL_DIR) {
+  const file = installConfigPath(installDir);
+  const cfg = { ...loadInstallConfig(installDir), ...patch };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n");
+  return file;
+}
+
+// Resolve the policy schema version (which selects the Windows containment backend):
 //   "0.6.0-alpha" -> BaseContainer (needs the BaseContainer velocity keys enabled)
 //   "0.4.0-alpha" -> AppContainer  (needs bfscfg.exe / BFS support in the Windows build)
-// Override with MXC_SCHEMA_VERSION to match what the host actually supports.
-export const SCHEMA_VERSION = process.env.MXC_SCHEMA_VERSION?.trim() || "0.6.0-alpha";
+// Precedence: MXC_SCHEMA_VERSION env > persisted config.json (set by the health check) > default.
+export function schemaVersion() {
+  return (
+    process.env.MXC_SCHEMA_VERSION?.trim() ||
+    loadInstallConfig().schemaVersion ||
+    DEFAULT_SCHEMA_VERSION
+  );
+}
+
+// The schema versions worth probing on this OS, most-preferred first. Only Windows has more than
+// one selectable containment backend; elsewhere the single native backend is used as-is.
+export function candidateSchemaVersions() {
+  if (process.platform !== "win32") return [schemaVersion()];
+  const seen = new Set();
+  return [schemaVersion(), "0.6.0-alpha", "0.4.0-alpha"].filter((v) => {
+    if (seen.has(v)) return false;
+    seen.add(v);
+    return true;
+  });
+}
 
 /** Drive/filesystem roots that should be readable. On Windows this is the repo's drive
  *  plus the system drive (so tooling under C:\Windows, C:\Program Files, the user profile,
@@ -168,7 +211,7 @@ export function buildPolicy({
   }
 
   return {
-    version: SCHEMA_VERSION,
+    version: schemaVersion(),
     filesystem: {
       readwritePaths: [repoRoot, temp, ...extraWritePaths],
       readonlyPaths,
@@ -312,7 +355,7 @@ export function buildPolicyFromProfile({ repoRoot, profile, requestOutbound, req
   }
 
   return {
-    version: SCHEMA_VERSION,
+    version: schemaVersion(),
     filesystem: { readwritePaths: dedupe(writePaths), readonlyPaths: dedupe(readonlyPaths) },
     network: allowOutbound ? { allowOutbound: true, allowedHosts: hosts } : { allowOutbound: false },
     timeoutMs: 0,

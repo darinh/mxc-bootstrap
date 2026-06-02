@@ -72,6 +72,7 @@ EOF
 chmod +x "${BIN_DIR}/mxc-bootstrap"
 echo "Launcher: ${BIN_DIR}/mxc-bootstrap"
 
+PATH_CHANGED=0
 if [[ "${NO_PATH}" -eq 0 ]]; then
   # Pick the user's shell profile and append an idempotent PATH export.
   PROFILE="${HOME}/.bashrc"
@@ -81,7 +82,8 @@ if [[ "${NO_PATH}" -eq 0 ]]; then
     echo "${BIN_DIR} already configured in ${PROFILE}."
   else
     echo "${LINE}" >> "${PROFILE}"
-    echo "${C_GREEN}Added ${BIN_DIR} to PATH in ${PROFILE} (open a new shell to use 'mxc-bootstrap').${C_RESET}"
+    PATH_CHANGED=1
+    echo "${C_GREEN}Added ${BIN_DIR} to PATH in ${PROFILE}.${C_RESET}"
   fi
 fi
 
@@ -99,4 +101,8 @@ fi
 
 echo
 echo "${C_GREEN}Machine setup done.${C_RESET}"
+if [[ "${PATH_CHANGED}" -eq 1 ]]; then
+  echo "${C_CYAN}IMPORTANT:${C_RESET} PATH was updated. Open a NEW shell before using 'mxc-bootstrap'"
+  echo "           (or in this shell: node \"${INSTALL_DIR}/cli.mjs\" <cmd>)."
+fi
 echo "Next: cd into a repo and run ${C_CYAN}mxc-bootstrap init${C_RESET}"

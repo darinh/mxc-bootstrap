@@ -84,16 +84,21 @@ $shLauncher = Join-Path $BinDir "mxc-bootstrap"
 ) -join "`n" | Set-Content -Path $shLauncher -Encoding ASCII -NoNewline
 Write-Host "Launcher: $cmdLauncher"
 
+$pathChanged = $false
 if (-not $NoPath) {
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
   if (($userPath -split ';') -notcontains $BinDir) {
     $newPath = if ($userPath) { "$userPath;$BinDir" } else { $BinDir }
     [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-    Write-Host "Added $BinDir to your user PATH (open a new terminal to use 'mxc-bootstrap')." -ForegroundColor Green
+    $pathChanged = $true
+    Write-Host "Added $BinDir to your user PATH." -ForegroundColor Green
   } else {
     Write-Host "$BinDir already on PATH."
   }
 }
+
+# Make it usable in THIS session too, so a follow-up command works without a restart.
+if ($env:Path -notlike "*$BinDir*") { $env:Path = "$env:Path;$BinDir" }
 
 # 4. Repo-agnostic health check.
 Write-Host "`n== health check ==" -ForegroundColor Cyan
@@ -106,4 +111,11 @@ if ($Register) {
 }
 
 Write-Host "`nMachine setup done." -ForegroundColor Green
+if ($pathChanged) {
+  Write-Host "IMPORTANT: " -ForegroundColor Yellow -NoNewline
+  Write-Host "PATH was updated. Open a NEW terminal before using 'mxc-bootstrap'"
+  Write-Host "           (or, in this window, run it via: " -NoNewline
+  Write-Host "node `"$InstallDir\cli.mjs`" <cmd>" -ForegroundColor Cyan -NoNewline
+  Write-Host ")."
+}
 Write-Host "Next: cd into a repo and run " -NoNewline; Write-Host "mxc-bootstrap init" -ForegroundColor Cyan
