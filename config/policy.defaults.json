@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "0.6.0-alpha",
+  "readScope": "drive",
+  "scopedTempLabel": "mxc-scratch",
+  "networkDefault": "deny",
+  "notes": "These document the defaults baked into policy.mjs. Override per-deployment via the MCP env block (MXC_REPO_ROOT, MXC_ALLOW_NETWORK, MXC_READ_SCOPE)."
+}

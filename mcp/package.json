@@ -1,0 +1,19 @@
+{
+  "name": "mxc-sandbox-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Harness-agnostic MCP server that runs agent commands inside a policy-restricted MXC sandbox",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "selftest": "node selftest.mjs"
+  },
+  "dependencies": {
+    "@microsoft/mxc-sdk": "^0.6.1",
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
