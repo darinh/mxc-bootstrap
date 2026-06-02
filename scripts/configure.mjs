@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import readline from "node:readline";
 
 function parseArgs(argv) {
   const out = {};
@@ -132,18 +133,71 @@ function register(harness) {
   }
 }
 
+// ---- harness menu ----------------------------------------------------------
+const HARNESSES = [
+  { key: "copilot", label: "GitHub Copilot CLI" },
+  { key: "claude", label: "Claude Code" },
+  { key: "codex", label: "OpenAI Codex CLI" },
+  { key: "cursor", label: "Cursor / Windsurf / VS Code" },
+];
+
+function parseRegisterArg(s) {
+  if (!s) return [];
+  const parts = s.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  if (parts.includes("all")) return HARNESSES.map((h) => h.key);
+  return parts;
+}
+
+function registerMany(keys) {
+  for (const key of keys) {
+    try {
+      const res = register(key);
+      console.log(`  \u2713 registered '${key}': ${JSON.stringify(res)}`);
+    } catch (err) {
+      console.error(`  \u2717 failed to register '${key}': ${err?.message || err}`);
+    }
+  }
+  console.log("Restart the agent/CLI to pick up the new MCP server.");
+}
+
+function promptMenu() {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    console.log("\nRegister the MXC sandbox with which agent(s)?");
+    HARNESSES.forEach((h, i) => console.log(`  ${i + 1}) ${h.label}`));
+    console.log(`  ${HARNESSES.length + 1}) All of the above`);
+    console.log("  0) Skip (just show snippet locations)");
+    rl.question('Enter choice(s), e.g. "1 3" [0]: ', (ans) => {
+      rl.close();
+      const tokens = (ans || "").trim().split(/[\s,]+/).filter(Boolean);
+      if (!tokens.length || tokens.includes("0")) return resolve([]);
+      const keys = new Set();
+      for (const t of tokens) {
+        const n = Number(t);
+        if (n === HARNESSES.length + 1) HARNESSES.forEach((h) => keys.add(h.key));
+        else if (n >= 1 && n <= HARNESSES.length) keys.add(HARNESSES[n - 1].key);
+      }
+      resolve([...keys]);
+    });
+  });
+}
+
 // ---- run -------------------------------------------------------------------
 const regDir = renderSnippets();
 console.log(`Resolved registration snippets written to: ${regDir}`);
 console.log(`MCP server path: ${serverPath}`);
 
-if (args.register) {
-  const res = register(args.register);
-  console.log(`Registered with '${args.register}':`, JSON.stringify(res));
-  console.log("Restart the agent/CLI to pick up the new MCP server.");
+let toRegister = parseRegisterArg(args.register);
+// No --register flag and an interactive terminal -> show the menu.
+if (!args.register && process.stdin.isTTY) {
+  toRegister = await promptMenu();
+}
+
+if (toRegister.length) {
+  registerMany(toRegister);
 } else {
-  console.log("\nNo --register given. To wire it up, either:");
+  console.log("\nNothing registered. To wire it up later:");
   console.log(`  • copy the matching file from ${regDir} into your agent's MCP config, or`);
-  console.log(`  • re-run setup with --register <copilot|claude|codex|cursor>, or`);
+  console.log(`  • re-run setup and pick from the menu (or pass --register <copilot|claude|codex|cursor|all>), or`);
   console.log(`  • Claude Code: claude mcp add mxc-sandbox -- node ${serverPath}`);
 }

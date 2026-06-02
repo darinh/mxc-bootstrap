@@ -12,7 +12,7 @@
 #>
 param(
   [string]$InstallDir = (Join-Path $HOME ".mxc"),
-  [ValidateSet("copilot", "claude", "codex", "cursor", "")]
+  [ValidateSet("copilot", "claude", "codex", "cursor", "all", "")]
   [string]$Register = ""
 )
 

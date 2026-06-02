@@ -31,21 +31,23 @@ Any MCP agent ──run_in_sandbox(command)──► MCP server (this repo) ─�
 
 ## Install
 
-The repo is the **source**; `setup` deploys a runtime into `~/.mxc` and prints/installs the
-registration snippet for your agent(s).
+The repo is the **source**; `setup` deploys a runtime into `~/.mxc`, smoke-tests it, then shows an
+**interactive menu** to register with your agent(s). Flags are optional (for headless/automation).
 
 ### Windows (PowerShell)
 
 ```powershell
-./scripts/setup.ps1                      # deploy + smoke test, print snippets
-./scripts/setup.ps1 -Register copilot    # also merge into ~/.copilot/mcp-config.json (backs up)
+./scripts/setup.ps1                       # deploy, smoke test, then interactive menu
+./scripts/setup.ps1 -Register copilot     # headless: skip the menu, register Copilot CLI
+./scripts/setup.ps1 -Register all         # headless: register every supported agent
 ```
 
 ### Linux / macOS (bash)
 
 ```bash
-./scripts/setup.sh                       # deploy + smoke test, print snippets
-./scripts/setup.sh --register copilot    # also merge into ~/.copilot/mcp-config.json (backs up)
+./scripts/setup.sh                        # deploy, smoke test, then interactive menu
+./scripts/setup.sh --register copilot     # headless: skip the menu, register Copilot CLI
+./scripts/setup.sh --register all         # headless: register every supported agent
 ```
 
 Prerequisites: **Node.js >= 18**. On Linux you also need `bwrap` (bubblewrap) or `lxc`; on macOS
@@ -80,6 +82,25 @@ claude mcp add mxc-sandbox -- node ~/.mxc/mcp/server.mjs
 The tool is opt-in. Add to your `AGENTS.md` / `CLAUDE.md` / system prompt:
 
 > Run generated code and shell/git commands through the `run_in_sandbox` tool, not directly.
+
+## Multiple agents & repos on one box
+
+A **single** install in `~/.mxc` safely serves many agents working in different repos at the same
+time. You don't register it per-repo.
+
+- Each harness spawns its **own** stdio server process per session, so concurrent agents are isolated.
+- The writable root is chosen **per call** from the most trustworthy source available:
+  1. `MXC_REPO_ROOT` if pinned (forces a single repo — only for dedicated/locked-down installs).
+  2. The **MCP roots** the client advertises for that session — the server picks the root that
+     contains the requested `cwd` (or the first root). These come from the harness, not the model.
+  3. Fallback: the server's launch directory via `git rev-parse`.
+- The scoped temp dir is **hashed per repo** (`…/mxc-scratch/<hash>`), so two agents never share or
+  clobber each other's scratch space.
+
+So Copilot CLI in `~/work/api` and Claude Code in `~/work/web` each get write access limited to their
+own repo, automatically. The tool result echoes `rootSource` (`env` / `mcp-roots` / `launch-cwd`) and
+`repoRoot` so you can confirm the scope. For maximum certainty with untrusted agents, pin
+`MXC_REPO_ROOT` in that agent's registration.
 
 ## Tools exposed
 

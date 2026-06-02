@@ -14,9 +14,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  RootsListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { resolveRepoRoot, assertInsideRoot, buildPolicy } from "./policy.mjs";
+import { selectActiveRoot, assertInsideRoot, buildPolicy, pathFromRootUri } from "./policy.mjs";
 import { runSandboxed, platformSupport } from "./mxc.mjs";
 
 const NETWORK_ALLOWED = process.env.MXC_ALLOW_NETWORK === "1";
@@ -31,6 +32,28 @@ const server = new Server(
   { name: "mxc-sandbox", version: "0.1.0" },
   { capabilities: { tools: {} } }
 );
+
+// The client may advertise its workspace directories ("roots"). We use them as the trusted
+// repo root so ONE shared install scopes correctly for each agent/repo. Cached per process
+// (each agent gets its own server process) and invalidated when the client says they changed.
+let cachedRoots = null;
+server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
+  cachedRoots = null;
+});
+
+async function getTrustedRoots() {
+  const caps = server.getClientCapabilities?.();
+  if (!caps?.roots) return null;
+  if (cachedRoots) return cachedRoots;
+  try {
+    const res = await server.listRoots();
+    const roots = (res?.roots || []).map((r) => pathFromRootUri(r.uri)).filter(Boolean);
+    cachedRoots = roots.length ? roots : null;
+    return cachedRoots;
+  } catch {
+    return null;
+  }
+}
 
 const TOOLS = [
   {
@@ -93,8 +116,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const command = String(args.command || "").trim();
       if (!command) return textResult("Error: 'command' is required.", true);
 
-      const repoRoot = resolveRepoRoot();
+      const trustedRoots = await getTrustedRoots();
+      const repoRoot = selectActiveRoot({ trustedRoots, requestedCwd: args.cwd });
       const cwd = assertInsideRoot(repoRoot, args.cwd);
+
+      const rootSource = process.env.MXC_REPO_ROOT
+        ? "env"
+        : trustedRoots
+        ? "mcp-roots"
+        : "launch-cwd";
 
       const wantsNetwork = Boolean(args.allowOutbound);
       const allowOutbound = NETWORK_ALLOWED && wantsNetwork;
@@ -120,6 +150,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       return textResult(
         {
           repoRoot,
+          rootSource,
+          trustedRoots: trustedRoots || undefined,
           cwd,
           backend: result.backend,
           networkRequested: wantsNetwork,

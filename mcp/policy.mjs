@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 // Default policy schema version. This selects the Windows containment backend:
@@ -100,6 +101,47 @@ export function assertInsideRoot(repoRoot, requestedCwd) {
     throw new Error(`cwd '${requestedCwd}' is outside the trusted repo root '${root}'`);
   }
   return resolved;
+}
+
+/** Convert an MCP root URI (file://...) — or a plain path — to a filesystem path. */
+export function pathFromRootUri(uri) {
+  if (!uri) return null;
+  try {
+    return uri.startsWith("file:") ? fileURLToPath(uri) : path.resolve(uri);
+  } catch {
+    return null;
+  }
+}
+
+/** True if `target` is `root` or lives underneath it. */
+export function isInside(root, target) {
+  const rel = path.relative(path.resolve(root), path.resolve(target));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/**
+ * Choose the active trusted repo root for a single tool call. This is what makes one shared
+ * install safely serve MANY agents on MANY repos at once:
+ *   1. MXC_REPO_ROOT (pinned) always wins.
+ *   2. else the MCP roots the CLIENT advertised for this session — pick the one containing the
+ *      requested cwd (or the first). These come from the harness, not the model, so they're trusted.
+ *   3. else fall back to the server's launch dir via git (resolveRepoRoot).
+ * Each agent's server process gets its own client roots, so they never cross-contaminate.
+ */
+export function selectActiveRoot({ trustedRoots, requestedCwd, baseDir = process.cwd() }) {
+  const pinned = process.env.MXC_REPO_ROOT;
+  if (pinned && pinned.trim()) return path.resolve(pinned.trim());
+
+  const candidates =
+    trustedRoots && trustedRoots.length
+      ? trustedRoots.map((r) => path.resolve(r))
+      : [resolveRepoRoot(baseDir)];
+
+  if (requestedCwd && path.isAbsolute(requestedCwd)) {
+    const match = candidates.find((c) => isInside(c, requestedCwd));
+    if (match) return match;
+  }
+  return candidates[0];
 }
 
 /**
