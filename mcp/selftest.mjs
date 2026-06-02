@@ -100,8 +100,20 @@ function done(line) {
   process.exit(0);
 }
 
+// Exit code contract (consumed by setup to decide whether to offer remediation):
+//   0 = sandbox execution works (or non-applicable)
+//   3 = server installed & healthy, but this host has no working containment backend
+function exitUnusable(line) {
+  cleanup();
+  console.log("\n" + line);
+  process.exit(3);
+}
+
 if (!support.isSupported) {
-  done(green(bold("HEALTH CHECK OK")) + " — server is installed and healthy. (Sandbox execution backend unavailable on this host.)");
+  exitUnusable(
+    yellow(bold("HEALTH CHECK: install OK, but MXC has no backend on this host")) +
+      dim(" — sandbox execution unavailable.")
+  );
 }
 
 // 4. Execution probe — try each candidate backend; persist the first that works.
@@ -136,11 +148,9 @@ for (const a of attempts) {
 }
 console.log("");
 console.log(dim("Your install is complete and the MCP server runs fine — it just can't execute the"));
-console.log(dim("sandbox until the OS provides a containment backend. On Windows you need ONE of:"));
-console.log(dim("  • BaseContainer — a Windows build with the BaseContainer feature enabled"));
-console.log(dim("    (Windows 11 24H2+ / an Insider or provisioned host). Not user-toggleable on"));
-console.log(dim("    a stock build."));
-console.log(dim("  • AppContainer — a Windows build that ships bfscfg.exe (BFS support)."));
-console.log(dim("No reinstall needed: once a backend is present, the server starts using it"));
-console.log(dim("automatically (re-run this check to confirm and persist the choice)."));
-done(yellow(bold("HEALTH CHECK: install OK, execution unavailable on this host")) + dim(" — see guidance above."));
+console.log(dim("sandbox until a containment backend is available. On Windows you can enable one now:"));
+console.log("  " + cyan("mxc-bootstrap enable-backend") + dim("   (installs ViVeTool, flips the feature flags, reboots)"));
+console.log(dim("That turns on the BaseContainer backend (needs Windows 11 24H2+; admin + reboot)."));
+console.log(dim("Alternatively, AppContainer needs a Windows build that ships bfscfg.exe."));
+console.log(dim("No reinstall needed: re-run `mxc-bootstrap selftest` afterward to confirm + persist."));
+exitUnusable(yellow(bold("HEALTH CHECK: install OK, execution unavailable on this host")) + dim(" — see guidance above."));

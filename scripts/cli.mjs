@@ -230,6 +230,7 @@ ${bold("Commands:")}
   ${cyan("profiles")}                List available identities (profiles) and what they permit.
   ${cyan("register")} [harness...]   Register a global broker with agents (no repo binding).
                             ${dim("No args -> interactive menu. e.g. mxc-bootstrap register copilot")}
+  ${cyan("enable-backend")}          (Windows) Enable the BaseContainer backend the sandbox needs.
   ${cyan("selftest")}                Run the repo-agnostic health check (alias: ${dim("doctor")}).
   ${cyan("path")}                    Print the MCP server path (for manual config).
   ${cyan("server")}                  Run the MCP server on stdio (agents do this for you).
@@ -263,6 +264,23 @@ switch (cmd) {
   case "doctor":
     process.exit(run(path.join(MXC_HOME, "mcp", "selftest.mjs"), []));
     break;
+  case "enable-backend": {
+    if (process.platform !== "win32") {
+      console.log(
+        "enable-backend is Windows-only. On Linux install bubblewrap (e.g. `apt install bubblewrap`); " +
+          "on macOS the seatbelt backend is built in."
+      );
+      process.exit(0);
+    }
+    const script = path.join(MXC_HOME, "enable-backend.ps1");
+    const status = spawnSync(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...rest],
+      { stdio: "inherit" }
+    ).status ?? 0;
+    process.exit(status);
+    break;
+  }
   case "server":
     process.exit(run(serverPath, rest));
     break;

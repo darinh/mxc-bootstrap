@@ -90,7 +90,20 @@ fi
 # 4. Repo-agnostic health check.
 echo
 hdr "health check"
+set +e
 node "${MCP_DIR}/selftest.mjs"
+HEALTH_RC=$?
+set -e
+if [[ "${HEALTH_RC}" -ne 0 ]]; then
+  echo
+  echo "${C_CYAN}To enable sandbox execution on this host:${C_RESET}"
+  case "$(uname -s)" in
+    Linux)  echo "  • Install bubblewrap, e.g.  sudo apt install bubblewrap   (or your distro's package).";;
+    Darwin) echo "  • macOS ships the seatbelt backend (/usr/bin/sandbox-exec); ensure it's present.";;
+    *)      echo "  • Install an OS containment backend supported by MXC, then re-run: mxc-bootstrap selftest";;
+  esac
+  echo "  Then re-run: ${C_CYAN}mxc-bootstrap selftest${C_RESET}"
+fi
 
 # 5. Optional global registration now (otherwise onboard repos with `mxc-bootstrap init`).
 if [[ -n "${REGISTER}" ]]; then

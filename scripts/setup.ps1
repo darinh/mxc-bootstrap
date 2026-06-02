@@ -18,7 +18,9 @@ param(
   [string]$InstallDir = (Join-Path $HOME ".mxc"),
   [ValidateSet("copilot", "claude", "codex", "cursor", "all", "")]
   [string]$Register = "",
-  [switch]$NoPath
+  [switch]$NoPath,
+  [switch]$EnableBackend,
+  [switch]$NoEnableBackend
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,6 +48,7 @@ Get-ChildItem -Path (Join-Path $RepoRoot "mcp") -Exclude "node_modules" |
 
 Copy-Item -Force (Join-Path $RepoRoot "scripts\cli.mjs") (Join-Path $InstallDir "cli.mjs")
 Copy-Item -Force (Join-Path $RepoRoot "scripts\configure.mjs") (Join-Path $InstallDir "configure.mjs")
+Copy-Item -Force (Join-Path $RepoRoot "scripts\enable-backend.ps1") (Join-Path $InstallDir "enable-backend.ps1")
 
 # Profiles live at <install>\profiles (outside any agent's write scope — the trust anchor).
 $ProfilesDir = Join-Path $InstallDir "profiles"
@@ -103,6 +106,26 @@ if ($env:Path -notlike "*$BinDir*") { $env:Path = "$env:Path;$BinDir" }
 # 4. Repo-agnostic health check.
 Write-Host "`n== health check ==" -ForegroundColor Cyan
 node (Join-Path $McpDir "selftest.mjs")
+$execUsable = ($LASTEXITCODE -eq 0)
+
+# 4b. If the host can't execute the sandbox, offer to enable the Windows BaseContainer backend.
+if (-not $execUsable -and -not $NoEnableBackend) {
+  $enableScript = Join-Path $InstallDir "enable-backend.ps1"
+  $doEnable = $EnableBackend
+  if (-not $doEnable -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host ""
+    Write-Host "The sandbox can't execute yet because the Windows BaseContainer backend is off." -ForegroundColor Yellow
+    Write-Host "I can enable it now (installs ViVeTool via winget, flips the feature flags, reboots)."
+    $ans = Read-Host "Enable the BaseContainer backend now? [y/N]"
+    $doEnable = ($ans -match '^(y|yes)$')
+  }
+  if ($doEnable) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $enableScript
+  } else {
+    Write-Host "Skipped. You can enable it later with: " -NoNewline
+    Write-Host "mxc-bootstrap enable-backend" -ForegroundColor Cyan
+  }
+}
 
 # 5. Optional global registration now (otherwise onboard repos with `mxc-bootstrap init`).
 if ($Register) {
