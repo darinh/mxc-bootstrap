@@ -110,6 +110,7 @@ identity that resolves for your current directory.
 | `profiles` | List available identities and what they permit. |
 | `register [harness…]` | Register a global broker with agents (no repo binding). No args = menu. |
 | `selftest` | Repo-agnostic health check (alias `doctor`). |
+| `enable-backend` | (Windows) Enable the BaseContainer backend via ViVeTool. `-Disable` reverts. |
 | `path` | Print the MCP server path (for manual config). |
 | `server` | Run the MCP server on stdio (agents do this for you). |
 
@@ -185,15 +186,17 @@ server uses it automatically — no env var needed).
 
 | OS | Backend | Requirement |
 |----|---------|-------------|
-| Windows | BaseContainer (`0.6.0-alpha`) | A Windows build with BaseContainer enabled (Windows 11 24H2+ / Insider / provisioned host) — not user-toggleable on a stock build |
+| Windows | BaseContainer (`0.6.0-alpha`) | The BaseContainer feature enabled (Windows 11 24H2+). Run `mxc-bootstrap enable-backend` to turn it on via ViVeTool (admin + reboot) |
 | Windows | AppContainer (`0.4.0-alpha`) | A Windows build that ships `bfscfg.exe` (BFS support) |
 | Linux | bubblewrap | `bwrap` installed (or `lxc`) |
 | macOS | seatbelt | `/usr/bin/sandbox-exec` (built in); runs with the experimental flag |
 
 If **no** backend works, the health check says so plainly and explains why — your install is still
-complete, and the server starts executing automatically once the OS provides a backend (re-run
-`mxc-bootstrap selftest` to confirm and persist the choice). You can also force a specific schema
-with `MXC_SCHEMA_VERSION`.
+complete. On Windows, machine setup offers to enable the BaseContainer backend for you (or run
+`mxc-bootstrap enable-backend` later); this installs [ViVeTool](https://github.com/thebookisclosed/ViVe)
+via winget, flips the BaseContainer feature flags, and prompts for a reboot (reversible with
+`mxc-bootstrap enable-backend -Disable`). After rebooting, run `mxc-bootstrap selftest` to confirm and
+persist the choice. You can also force a specific schema with `MXC_SCHEMA_VERSION`.
 
 ## License
 
