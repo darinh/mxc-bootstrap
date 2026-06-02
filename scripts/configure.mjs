@@ -30,6 +30,9 @@ function parseArgs(argv) {
     if (a === "--install") out.install = argv[++i];
     else if (a === "--repo") out.repo = argv[++i];
     else if (a === "--register") out.register = argv[++i];
+    else if (a === "--profile") out.profile = argv[++i];
+    else if (a === "--agent-id") out.agentId = argv[++i];
+    else if (a === "--name") out.name = argv[++i];
   }
   return out;
 }
@@ -40,7 +43,14 @@ const repoDir = path.resolve(args.repo || process.cwd());
 // MCP clients accept forward slashes on every OS; avoids JSON backslash escaping headaches.
 const serverPath = path.join(installDir, "mcp", "server.mjs").split(path.sep).join("/");
 
-const ENV = { MXC_ALLOW_NETWORK: "0", MXC_READ_SCOPE: "drive" };
+// The MCP server key. Pinned-identity brokers use a distinct key so several can coexist.
+const SERVER_NAME = args.name || "mxc-sandbox";
+
+// Identity is normally resolved by the broker from ~/.mxc/repos.json. A pinned registration can
+// instead bake the identity into the launch env (the agent can't alter it — like a service account).
+const ENV = {};
+if (args.profile) ENV.MXC_PROFILE = args.profile;
+if (args.agentId) ENV.MXC_AGENT_ID = args.agentId;
 
 function backup(file) {
   if (fs.existsSync(file)) {
@@ -60,7 +70,8 @@ function readJson(file) {
 }
 
 function entry({ includeType = false } = {}) {
-  const e = { command: "node", args: [serverPath], env: { ...ENV } };
+  const e = { command: "node", args: [serverPath] };
+  if (Object.keys(ENV).length) e.env = { ...ENV };
   if (includeType) return { type: "local", ...e };
   return e;
 }
@@ -85,7 +96,7 @@ function mergeJson(file, { includeType = false } = {}) {
   const bak = backup(file);
   const cfg = readJson(file);
   if (!cfg.mcpServers || typeof cfg.mcpServers !== "object") cfg.mcpServers = {};
-  cfg.mcpServers["mxc-sandbox"] = entry({ includeType });
+  cfg.mcpServers[SERVER_NAME] = entry({ includeType });
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n");
   return { file, bak };
 }
@@ -95,14 +106,18 @@ function mergeToml(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const bak = backup(file);
   let content = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  if (content.includes("[mcp_servers.mxc-sandbox]")) {
+  const header = `[mcp_servers.${SERVER_NAME}]`;
+  if (content.includes(header)) {
     return { file, bak, skipped: "already present — left unchanged" };
   }
-  const block =
-    `\n[mcp_servers.mxc-sandbox]\n` +
+  const envInline = Object.entries(ENV)
+    .map(([k, v]) => `${k} = "${v}"`)
+    .join(", ");
+  let block =
+    `\n${header}\n` +
     `command = "node"\n` +
-    `args = ["${serverPath}"]\n` +
-    `env = { MXC_ALLOW_NETWORK = "0", MXC_READ_SCOPE = "drive" }\n`;
+    `args = ["${serverPath}"]\n`;
+  if (envInline) block += `env = { ${envInline} }\n`;
   fs.writeFileSync(file, content + block);
   return { file, bak };
 }
@@ -110,14 +125,10 @@ function mergeToml(file) {
 // ---- claude: prefer the CLI, else fall back to ~/.claude.json --------------
 function registerClaude() {
   try {
+    const envArgs = Object.entries(ENV).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
     execFileSync(
       "claude",
-      [
-        "mcp", "add", "mxc-sandbox",
-        "-e", "MXC_ALLOW_NETWORK=0",
-        "-e", "MXC_READ_SCOPE=drive",
-        "--", "node", serverPath,
-      ],
+      ["mcp", "add", SERVER_NAME, ...envArgs, "--", "node", serverPath],
       { stdio: "ignore" }
     );
     return { via: "claude mcp add" };

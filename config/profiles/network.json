@@ -1,0 +1,7 @@
+{
+  "name": "network",
+  "description": "Read anywhere; write inside the repo (plus scoped temp); outbound network allowed. Optionally restrict to specific hosts via the hosts list (empty = any host).",
+  "write": "repo",
+  "readScope": "drive",
+  "network": { "allow": true, "hosts": ["*"] }
+}

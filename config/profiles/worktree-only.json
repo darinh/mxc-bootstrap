@@ -1,0 +1,8 @@
+{
+  "name": "worktree-only",
+  "description": "Read anywhere (including the whole repo); write ONLY inside the repo's .worktrees directory plus a scoped temp dir. Lets an agent build/experiment in git worktrees without touching the main working tree. No network.",
+  "write": "none",
+  "extraWritePaths": [".worktrees"],
+  "readScope": "drive",
+  "network": { "allow": false, "hosts": [] }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "default",
+  "description": "Read anywhere on the machine; write only inside the repo (plus a scoped temp dir). No network.",
+  "write": "repo",
+  "readScope": "drive",
+  "network": { "allow": false, "hosts": [] }
+}

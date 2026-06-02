@@ -3,5 +3,5 @@
   "readScope": "drive",
   "scopedTempLabel": "mxc-scratch",
   "networkDefault": "deny",
-  "notes": "These document the defaults baked into policy.mjs. Override per-deployment via the MCP env block (MXC_REPO_ROOT, MXC_ALLOW_NETWORK, MXC_READ_SCOPE)."
+  "notes": "These document the defaults baked into policy.mjs. Behavior is normally selected via identity profiles in profiles/*.json; env overrides include MXC_PROFILE, MXC_REPO_ROOT, MXC_FORCE_NO_NETWORK, and MXC_SCHEMA_VERSION."
 }

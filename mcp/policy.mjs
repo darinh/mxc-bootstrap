@@ -179,3 +179,220 @@ export function buildPolicy({
     timeoutMs,
   };
 }
+
+// ----------------------------------------------------------------------------
+// Profiles = identities. A profile is a named policy template. The trusted broker
+// resolves which profile applies (from pinned env or the repo registry) and turns it
+// into a concrete SandboxPolicy for the active repo. The agent never picks its own profile.
+// ----------------------------------------------------------------------------
+
+/** The built-in fallback profile, identical to default.json (used if the profiles dir is missing). */
+export function builtinDefaultProfile() {
+  return normalizeProfile(
+    {
+      name: "default",
+      description: "Read anywhere; write only inside the repo. No network.",
+      write: "repo",
+      readScope: "drive",
+      network: { allow: false, hosts: [] },
+    },
+    "default"
+  );
+}
+
+function normalizeProfile(p, fallbackName) {
+  return {
+    name: p.name || fallbackName,
+    description: p.description || "",
+    write: p.write || "repo", // "repo" | "none"
+    extraWritePaths: Array.isArray(p.extraWritePaths) ? p.extraWritePaths : [],
+    readScope: p.readScope || "drive", // "drive" | "repo"
+    extraReadPaths: Array.isArray(p.extraReadPaths) ? p.extraReadPaths : [],
+    network: {
+      allow: Boolean(p.network && p.network.allow),
+      hosts: (p.network && Array.isArray(p.network.hosts) ? p.network.hosts : []),
+    },
+  };
+}
+
+const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
+
+/** Load and normalize a profile by name from a profiles directory. Throws if not found. */
+export function loadProfile(name, profilesDir) {
+  if (!PROFILE_NAME_RE.test(name)) {
+    throw new Error(`invalid profile name '${name}'`);
+  }
+  const dir = path.resolve(profilesDir);
+  const file = path.join(dir, `${name}.json`);
+  // Defense in depth: the resolved file must stay directly inside the profiles dir.
+  if (path.dirname(path.resolve(file)) !== dir) {
+    throw new Error(`profile path escapes profiles dir: '${name}'`);
+  }
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  return normalizeProfile(raw, name);
+}
+
+/** List available profiles (name + description) in a directory. */
+export function listProfiles(profilesDir) {
+  let names = [];
+  try {
+    names = fs.readdirSync(profilesDir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  return names
+    .map((f) => {
+      try {
+        return loadProfile(f.replace(/\.json$/, ""), profilesDir);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function dedupe(arr) {
+  return [...new Set(arr.map((p) => path.resolve(p)))];
+}
+
+/**
+ * Create `dir` (recursively) and verify that, after resolving any symlinks/junctions/reparse
+ * points, it still lives inside `root`. Guards against a repo containing e.g. `.worktrees`
+ * pointing outside the repo (which would escape the sandbox's intended write scope).
+ */
+function ensureWritableInside(root, dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const realRoot = fs.realpathSync(root);
+  const realDir = fs.realpathSync(dir);
+  const rel = path.relative(realRoot, realDir);
+  if (rel === "" || rel === ".") return realDir; // dir === root
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`write path '${dir}' resolves outside the repo root '${root}'`);
+  }
+  return realDir;
+}
+
+/**
+ * Turn a resolved profile into a concrete SandboxPolicy for `repoRoot`.
+ * Writable paths are derived from the profile + trusted repo root only.
+ * `MXC_FORCE_NO_NETWORK=1` is a machine-level kill switch that can only restrict.
+ */
+export function buildPolicyFromProfile({ repoRoot, profile, requestOutbound, requestedHosts = [] }) {
+  const root = fs.realpathSync(path.resolve(repoRoot));
+  const temp = scopedTempDir(root);
+
+  const writePaths = [];
+  if (profile.write === "repo") writePaths.push(root);
+  for (const rel of profile.extraWritePaths) {
+    const abs = assertInsideRoot(root, rel); // lexical check: must be under repo
+    writePaths.push(ensureWritableInside(root, abs)); // + realpath check after mkdir
+  }
+  writePaths.push(temp);
+
+  const readonlyPaths = profile.extraReadPaths.map((r) => path.resolve(root, r));
+  if (profile.readScope === "drive") readonlyPaths.push(...readableRoots(root));
+  else readonlyPaths.push(root);
+
+  const forceOff = process.env.MXC_FORCE_NO_NETWORK === "1";
+  // A network-capable profile grants outbound unless the agent explicitly suppresses it.
+  const allowOutbound = !forceOff && profile.network.allow && requestOutbound !== false;
+
+  // Host semantics: ["*"] (or empty) = unrestricted; a concrete list caps the agent via
+  // intersection (the agent can never broaden the profile's allowlist).
+  const unrestricted = profile.network.hosts.length === 0 || profile.network.hosts.includes("*");
+  let hosts = [];
+  if (allowOutbound) {
+    if (unrestricted) {
+      hosts = requestedHosts; // agent may narrow; empty = any host
+    } else {
+      hosts = requestedHosts.length
+        ? requestedHosts.filter((h) => profile.network.hosts.includes(h))
+        : profile.network.hosts;
+    }
+  }
+
+  return {
+    version: SCHEMA_VERSION,
+    filesystem: { readwritePaths: dedupe(writePaths), readonlyPaths: dedupe(readonlyPaths) },
+    network: allowOutbound ? { allowOutbound: true, allowedHosts: hosts } : { allowOutbound: false },
+    timeoutMs: 0,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Repo registry: central repoRoot -> { profile, agentId } map written by `mxc-bootstrap init`.
+// Lives in the install dir (outside any agent's write scope) so an agent can't rebind itself.
+// ----------------------------------------------------------------------------
+
+export function repoRegistryPath(installDir) {
+  return path.join(installDir, "repos.json");
+}
+
+/**
+ * The trusted config dir (~/.mxc) must never be writable by a sandboxed agent, otherwise the
+ * agent could rewrite repos.json/profiles and escalate its own identity. Reject onboarding (or
+ * brokering for) a repo whose root contains — or is contained by — the install dir.
+ */
+export function assertConfigOutsideRoot(repoRoot, installDir) {
+  const root = path.resolve(repoRoot);
+  const inst = path.resolve(installDir);
+  const a = path.relative(root, inst); // inst relative to root
+  const instInsideRoot = a === "" || (!a.startsWith("..") && !path.isAbsolute(a));
+  const b = path.relative(inst, root); // root relative to inst
+  const rootInsideInst = b === "" || (!b.startsWith("..") && !path.isAbsolute(b));
+  if (instInsideRoot || rootInsideInst) {
+    throw new Error(
+      `refusing: the mxc-bootstrap config dir '${inst}' overlaps the repo root '${root}'. ` +
+        `Onboard a repo that does not contain ~/.mxc.`
+    );
+  }
+}
+
+function realpathSafe(p) {
+  try {
+    return fs.realpathSync(path.resolve(p));
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+export function loadRepoBinding(repoRoot, installDir) {
+  let reg;
+  try {
+    reg = JSON.parse(fs.readFileSync(repoRegistryPath(installDir), "utf8"));
+  } catch {
+    return null;
+  }
+  return reg[realpathSafe(repoRoot)] || reg[path.resolve(repoRoot)] || null;
+}
+
+export function setRepoBinding(repoRoot, binding, installDir) {
+  const file = repoRegistryPath(installDir);
+  let reg = {};
+  try {
+    reg = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    /* new registry */
+  }
+  reg[realpathSafe(repoRoot)] = binding;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(reg, null, 2) + "\n");
+  return file;
+}
+
+/**
+ * Resolve the active identity for a repo. Precedence:
+ *   1. MXC_PROFILE env (explicit pinned identity).
+ *   2. repo registry binding.
+ *   3. MXC_DEFAULT_PROFILE env or "default".
+ */
+export function resolveIdentity(repoRoot, installDir) {
+  if (process.env.MXC_PROFILE) {
+    return { profileName: process.env.MXC_PROFILE, agentId: process.env.MXC_AGENT_ID || "pinned", source: "env" };
+  }
+  const binding = loadRepoBinding(repoRoot, installDir);
+  if (binding && binding.profile) {
+    return { profileName: binding.profile, agentId: binding.agentId || "repo", source: "registry" };
+  }
+  return { profileName: process.env.MXC_DEFAULT_PROFILE || "default", agentId: "default", source: "default" };
+}

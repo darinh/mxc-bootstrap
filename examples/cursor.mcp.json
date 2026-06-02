@@ -2,11 +2,7 @@
   "mcpServers": {
     "mxc-sandbox": {
       "command": "node",
-      "args": ["<INSTALL_DIR>/mcp/server.mjs"],
-      "env": {
-        "MXC_ALLOW_NETWORK": "0",
-        "MXC_READ_SCOPE": "drive"
-      }
+      "args": ["<INSTALL_DIR>/mcp/server.mjs"]
     }
   }
 }

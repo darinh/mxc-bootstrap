@@ -16,17 +16,39 @@ import {
   CallToolRequestSchema,
   RootsListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-import { selectActiveRoot, assertInsideRoot, buildPolicy, pathFromRootUri } from "./policy.mjs";
+import {
+  selectActiveRoot,
+  assertInsideRoot,
+  pathFromRootUri,
+  resolveIdentity,
+  loadProfile,
+  builtinDefaultProfile,
+  buildPolicyFromProfile,
+  assertConfigOutsideRoot,
+} from "./policy.mjs";
 import { runSandboxed, platformSupport } from "./mxc.mjs";
 
-const NETWORK_ALLOWED = process.env.MXC_ALLOW_NETWORK === "1";
-// Optional server-side host allowlist. When set, agent-requested hosts are intersected with
-// this list (and an empty agent request defaults to it) — the agent can never broaden it.
-const SERVER_ALLOWED_HOSTS = (process.env.MXC_ALLOWED_HOSTS || "")
-  .split(",")
-  .map((h) => h.trim())
-  .filter(Boolean);
+// The install dir is the parent of mcp/ (e.g. ~/.mxc). repos.json + profiles/ live there,
+// OUTSIDE any agent's write scope, so an agent can't rebind its own identity.
+const INSTALL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PROFILES_DIR = process.env.MXC_PROFILES_DIR || path.join(INSTALL_DIR, "profiles");
+
+/** Resolve the identity for a repo and load its profile (falling back to a builtin default). */
+function resolveProfileFor(repoRoot) {
+  const identity = resolveIdentity(repoRoot, INSTALL_DIR);
+  let profile;
+  try {
+    profile = loadProfile(identity.profileName, PROFILES_DIR);
+  } catch {
+    profile = builtinDefaultProfile();
+    identity.profileName = profile.name;
+    identity.fallback = true;
+  }
+  return { identity, profile };
+}
 
 const server = new Server(
   { name: "mxc-sandbox", version: "0.1.0" },
@@ -74,7 +96,8 @@ const TOOLS = [
         allowOutbound: {
           type: "boolean",
           description:
-            "Request outbound network. Only honored if the server was started with MXC_ALLOW_NETWORK=1.",
+            "Request outbound network. Only honored if the active profile permits network. " +
+            "Pass false to suppress network even when the profile allows it.",
         },
         allowedHosts: {
           type: "array",
@@ -109,7 +132,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   try {
     if (name === "platform_support") {
-      return textResult({ networkAllowedByServer: NETWORK_ALLOWED, support: platformSupport() });
+      return textResult({ profilesDir: PROFILES_DIR, support: platformSupport() });
     }
 
     if (name === "run_in_sandbox") {
@@ -118,6 +141,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       const trustedRoots = await getTrustedRoots();
       const repoRoot = selectActiveRoot({ trustedRoots, requestedCwd: args.cwd });
+      assertConfigOutsideRoot(repoRoot, INSTALL_DIR);
       const cwd = assertInsideRoot(repoRoot, args.cwd);
 
       const rootSource = process.env.MXC_REPO_ROOT
@@ -126,36 +150,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         ? "mcp-roots"
         : "launch-cwd";
 
-      const wantsNetwork = Boolean(args.allowOutbound);
-      const allowOutbound = NETWORK_ALLOWED && wantsNetwork;
+      const { identity, profile } = resolveProfileFor(repoRoot);
 
       const requestedHosts = Array.isArray(args.allowedHosts) ? args.allowedHosts : [];
-      let allowedHosts = requestedHosts;
-      if (SERVER_ALLOWED_HOSTS.length) {
-        // Broker caps the hosts: intersect, or fall back to the server list if agent gave none.
-        allowedHosts = requestedHosts.length
-          ? requestedHosts.filter((h) => SERVER_ALLOWED_HOSTS.includes(h))
-          : SERVER_ALLOWED_HOSTS;
-      }
-
-      const policy = buildPolicy({
+      const policy = buildPolicyFromProfile({
         repoRoot,
-        allowOutbound,
-        allowedHosts,
+        profile,
+        requestOutbound: args.allowOutbound,
+        requestedHosts,
       });
+      const networkGranted = policy.network.allowOutbound === true;
 
       const dryRun = Boolean(args.dryRun);
       const result = await runSandboxed({ command, cwd, policy, dryRun });
 
       return textResult(
         {
+          identity: {
+            profile: identity.profileName,
+            agentId: identity.agentId,
+            source: identity.source,
+            fallback: identity.fallback || undefined,
+          },
           repoRoot,
           rootSource,
           trustedRoots: trustedRoots || undefined,
           cwd,
           backend: result.backend,
-          networkRequested: wantsNetwork,
-          networkGranted: allowOutbound,
+          networkRequested: Boolean(args.allowOutbound),
+          networkGranted,
           dryRun,
           policy,
           exitCode: result.exitCode,

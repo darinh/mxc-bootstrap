@@ -1,0 +1,7 @@
+{
+  "name": "readonly",
+  "description": "Read anywhere on the machine; write nothing except a scoped temp dir. No network. Good for analysis/review agents.",
+  "write": "none",
+  "readScope": "drive",
+  "network": { "allow": false, "hosts": [] }
+}

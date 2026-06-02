@@ -1,11 +1,21 @@
-// Smoke test: verify the SDK loads, report platform support, and try a trivial sandboxed command.
-// Run: node selftest.mjs
+// Health check: verify the SDK loads, report platform support, list available identity profiles,
+// and try a trivial sandboxed command in a THROWAWAY temp dir (repo-agnostic — this never reports
+// any real repo as writable). Run: node selftest.mjs
 //
 // Exit code is always 0 when the server itself is healthy. A host that can't execute the sandbox
 // (missing backend support) is reported as a WARNING, not a failure — the MCP server still works
 // and run_in_sandbox will surface the same reason to the agent.
 
-import { resolveRepoRoot, buildPolicy } from "./policy.mjs";
+import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  buildPolicyFromProfile,
+  builtinDefaultProfile,
+  listProfiles,
+} from "./policy.mjs";
 import { runSandboxed, platformSupport } from "./mxc.mjs";
 
 // Minimal ANSI coloring; disabled when not a TTY or when NO_COLOR is set.
@@ -28,6 +38,17 @@ function cleanReason(stderr) {
   return text || stderr.trim();
 }
 
+// Profiles live in <install>/profiles after machine setup, or config/profiles in this repo.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+function findProfilesDir() {
+  const candidates = [
+    process.env.MXC_PROFILES_DIR,
+    path.resolve(HERE, "..", "profiles"),
+    path.resolve(HERE, "..", "config", "profiles"),
+  ].filter(Boolean);
+  return candidates.find((d) => fs.existsSync(d)) || null;
+}
+
 console.log(bold(cyan("MXC sandbox self-test")));
 
 // 1. SDK + platform
@@ -39,22 +60,42 @@ if (support.isSupported) {
   warn(`MXC not available on this host: ${support.reason || "unknown"}`);
 }
 
-// 2. Policy builds correctly
-const repoRoot = resolveRepoRoot(process.cwd());
-const policy = buildPolicy({ repoRoot });
-ok("policy built (read-anywhere, write-repo-only)");
-info(`write root : ${repoRoot}`);
-info(`scratch    : ${policy.filesystem.readwritePaths[1]}`);
-info(`read scope : ${policy.filesystem.readonlyPaths.join(", ")}`);
+// 2. Identity profiles
+const profilesDir = findProfilesDir();
+if (profilesDir) {
+  const profiles = listProfiles(profilesDir);
+  ok(`identity profiles available: ${profiles.map((p) => p.name).join(", ") || "(none)"}`);
+  info(`profiles dir: ${profilesDir}`);
+} else {
+  warn("no profiles dir found — broker will fall back to the builtin 'default' identity");
+}
+
+// 3. Policy builds correctly, using a disposable temp dir as a stand-in "repo" so the health
+//    check never lists a real repository as writable.
+const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mxc-selftest-"));
+const policy = buildPolicyFromProfile({ repoRoot: probeRoot, profile: builtinDefaultProfile() });
+ok("policy built from the 'default' identity (read-anywhere, write-repo-only)");
+info(`probe write root : ${policy.filesystem.readwritePaths[0]}`);
+info(`read scope       : ${policy.filesystem.readonlyPaths.join(", ")}`);
+
+function cleanup() {
+  try {
+    fs.rmSync(probeRoot, { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
+}
 
 if (!support.isSupported) {
+  cleanup();
   console.log("\n" + green(bold("SELF-TEST OK")) + " — server is healthy. (Sandbox execution unavailable on this host.)");
   process.exit(0);
 }
 
-// 3. Execution probe
+// 4. Execution probe (inside the disposable temp dir)
 const cmd = process.platform === "win32" ? "cmd /c echo hello-from-sandbox" : "echo hello-from-sandbox";
-const res = await runSandboxed({ command: cmd, cwd: repoRoot, policy });
+const res = await runSandboxed({ command: cmd, cwd: probeRoot, policy });
+cleanup();
 
 console.log("");
 if (res.exitCode === 0) {
