@@ -14,6 +14,15 @@ import os from "node:os";
 import { execFileSync } from "node:child_process";
 import readline from "node:readline";
 
+// Minimal ANSI coloring; disabled when not a TTY or when NO_COLOR is set.
+const COLOR = process.stdout.isTTY && !process.env.NO_COLOR;
+const c = (code, s) => (COLOR ? `\x1b[${code}m${s}\x1b[0m` : s);
+const bold = (s) => c("1", s);
+const green = (s) => c("32", s);
+const red = (s) => c("31", s);
+const cyan = (s) => c("36", s);
+const dim = (s) => c("2", s);
+
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
@@ -152,22 +161,22 @@ function registerMany(keys) {
   for (const key of keys) {
     try {
       const res = register(key);
-      console.log(`  \u2713 registered '${key}': ${JSON.stringify(res)}`);
+      console.log(`  ${green("\u2713")} registered ${bold(key)} ${dim(JSON.stringify(res))}`);
     } catch (err) {
-      console.error(`  \u2717 failed to register '${key}': ${err?.message || err}`);
+      console.error(`  ${red("\u2717")} failed to register ${bold(key)}: ${red(err?.message || err)}`);
     }
   }
-  console.log("Restart the agent/CLI to pick up the new MCP server.");
+  console.log(dim("Restart the agent/CLI to pick up the new MCP server."));
 }
 
 function promptMenu() {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    console.log("\nRegister the MXC sandbox with which agent(s)?");
-    HARNESSES.forEach((h, i) => console.log(`  ${i + 1}) ${h.label}`));
-    console.log(`  ${HARNESSES.length + 1}) All of the above`);
-    console.log("  0) Skip (just show snippet locations)");
-    rl.question('Enter choice(s), e.g. "1 3" [0]: ', (ans) => {
+    console.log("\n" + bold(cyan("Register the MXC sandbox with which agent(s)?")));
+    HARNESSES.forEach((h, i) => console.log(`  ${bold(cyan(String(i + 1)))}) ${h.label}`));
+    console.log(`  ${bold(cyan(String(HARNESSES.length + 1)))}) All of the above`);
+    console.log(`  ${bold(cyan("0"))}) Skip (just show snippet locations)`);
+    rl.question(`Enter choice(s), e.g. ${cyan('"1 3"')} ${dim("[0]")}: `, (ans) => {
       rl.close();
       const tokens = (ans || "").trim().split(/[\s,]+/).filter(Boolean);
       if (!tokens.length || tokens.includes("0")) return resolve([]);
@@ -184,8 +193,8 @@ function promptMenu() {
 
 // ---- run -------------------------------------------------------------------
 const regDir = renderSnippets();
-console.log(`Resolved registration snippets written to: ${regDir}`);
-console.log(`MCP server path: ${serverPath}`);
+console.log(`Resolved registration snippets written to: ${cyan(regDir)}`);
+console.log(`MCP server path: ${cyan(serverPath)}`);
 
 let toRegister = parseRegisterArg(args.register);
 // No --register flag and an interactive terminal -> show the menu.
@@ -196,8 +205,8 @@ if (!args.register && process.stdin.isTTY) {
 if (toRegister.length) {
   registerMany(toRegister);
 } else {
-  console.log("\nNothing registered. To wire it up later:");
-  console.log(`  • copy the matching file from ${regDir} into your agent's MCP config, or`);
-  console.log(`  • re-run setup and pick from the menu (or pass --register <copilot|claude|codex|cursor|all>), or`);
-  console.log(`  • Claude Code: claude mcp add mxc-sandbox -- node ${serverPath}`);
+  console.log("\n" + bold("Nothing registered.") + " To wire it up later:");
+  console.log(dim(`  • copy the matching file from ${regDir} into your agent's MCP config, or`));
+  console.log(dim(`  • re-run setup and pick from the menu (or pass --register <copilot|claude|codex|cursor|all>), or`));
+  console.log(dim(`  • Claude Code: claude mcp add mxc-sandbox -- node ${serverPath}`));
 }

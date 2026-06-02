@@ -20,7 +20,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MCP_DIR="${INSTALL_DIR}/mcp"
 
-echo "== mxc-bootstrap setup =="
+# Minimal coloring; disabled when stdout isn't a TTY or NO_COLOR is set.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_CYAN=$'\e[1;36m'; C_GREEN=$'\e[1;32m'; C_RESET=$'\e[0m'
+else
+  C_CYAN=""; C_GREEN=""; C_RESET=""
+fi
+hdr() { echo "${C_CYAN}== $* ==${C_RESET}"; }
+
+hdr "mxc-bootstrap setup"
 echo "repo:    ${REPO_ROOT}"
 echo "install: ${INSTALL_DIR}"
 
@@ -50,12 +58,12 @@ echo "Deployed server files to ${MCP_DIR}"
 
 # 3. Smoke test
 echo
-echo "== self-test =="
+hdr "self-test"
 node "${MCP_DIR}/selftest.mjs"
 
 # 4. Render snippets / optional registration
 echo
-echo "== registration =="
+hdr "registration"
 CONFIGURE_ARGS=("${REPO_ROOT}/scripts/configure.mjs" --install "${INSTALL_DIR}" --repo "${REPO_ROOT}")
 if [[ -n "${REGISTER}" ]]; then
   CONFIGURE_ARGS+=(--register "${REGISTER}")
@@ -63,4 +71,4 @@ fi
 node "${CONFIGURE_ARGS[@]}"
 
 echo
-echo "Done."
+echo "${C_GREEN}Done.${C_RESET}"

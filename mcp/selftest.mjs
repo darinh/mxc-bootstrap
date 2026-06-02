@@ -8,9 +8,18 @@
 import { resolveRepoRoot, buildPolicy } from "./policy.mjs";
 import { runSandboxed, platformSupport } from "./mxc.mjs";
 
-const ok = (m) => console.log(`  [ok]   ${m}`);
-const warn = (m) => console.log(`  [warn] ${m}`);
-const info = (m) => console.log(`  ${m}`);
+// Minimal ANSI coloring; disabled when not a TTY or when NO_COLOR is set.
+const COLOR = process.stdout.isTTY && !process.env.NO_COLOR;
+const c = (code, s) => (COLOR ? `\x1b[${code}m${s}\x1b[0m` : s);
+const bold = (s) => c("1", s);
+const green = (s) => c("32", s);
+const yellow = (s) => c("33", s);
+const cyan = (s) => c("36", s);
+const dim = (s) => c("2", s);
+
+const ok = (m) => console.log(`  ${green("[ok]")}   ${m}`);
+const warn = (m) => console.log(`  ${yellow("[warn]")} ${m}`);
+const info = (m) => console.log(dim(`  ${m}`));
 
 // MXC backend errors append a JSON blob after a human sentence; keep just the sentence.
 function cleanReason(stderr) {
@@ -19,7 +28,7 @@ function cleanReason(stderr) {
   return text || stderr.trim();
 }
 
-console.log("MXC sandbox self-test");
+console.log(bold(cyan("MXC sandbox self-test")));
 
 // 1. SDK + platform
 const support = platformSupport();
@@ -39,7 +48,7 @@ info(`scratch    : ${policy.filesystem.readwritePaths[1]}`);
 info(`read scope : ${policy.filesystem.readonlyPaths.join(", ")}`);
 
 if (!support.isSupported) {
-  console.log("\nSELF-TEST OK — server is healthy. (Sandbox execution unavailable on this host.)");
+  console.log("\n" + green(bold("SELF-TEST OK")) + " — server is healthy. (Sandbox execution unavailable on this host.)");
   process.exit(0);
 }
 
@@ -50,14 +59,14 @@ const res = await runSandboxed({ command: cmd, cwd: repoRoot, policy });
 console.log("");
 if (res.exitCode === 0) {
   ok(`sandbox executed a command (stdout: "${res.stdout.trim()}")`);
-  console.log("\nSELF-TEST OK — server healthy and sandbox execution works.");
+  console.log("\n" + green(bold("SELF-TEST OK")) + " — server healthy and sandbox execution works.");
 } else {
   warn("sandbox executed but the host could not run the command:");
   info(cleanReason(res.stderr));
   console.log("");
-  console.log("This is a HOST capability gap, not a config error — the MCP server is fine.");
-  console.log("On Windows the sandbox needs one of:");
-  console.log("  • BaseContainer (default) — velocity keys enabled (Windows 11 24H2+ / provisioned)");
-  console.log("  • AppContainer            — set MXC_SCHEMA_VERSION=0.4.0-alpha (needs bfscfg.exe)");
-  console.log("\nSELF-TEST OK — server is healthy. Sandbox execution will work on a provisioned host.");
+  console.log(dim("This is a HOST capability gap, not a config error — the MCP server is fine."));
+  console.log(dim("On Windows the sandbox needs one of:"));
+  console.log(dim("  • BaseContainer (default) — velocity keys enabled (Windows 11 24H2+ / provisioned)"));
+  console.log(dim("  • AppContainer            — set MXC_SCHEMA_VERSION=0.4.0-alpha (needs bfscfg.exe)"));
+  console.log("\n" + green(bold("SELF-TEST OK")) + " — server is healthy. Sandbox execution will work on a provisioned host.");
 }
