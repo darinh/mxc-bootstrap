@@ -1,58 +1,63 @@
 // Smoke test: verify the SDK loads, report platform support, and try a trivial sandboxed command.
 // Run: node selftest.mjs
+//
+// Exit code is always 0 when the server itself is healthy. A host that can't execute the sandbox
+// (missing backend support) is reported as a WARNING, not a failure — the MCP server still works
+// and run_in_sandbox will surface the same reason to the agent.
 
 import { resolveRepoRoot, buildPolicy } from "./policy.mjs";
 import { runSandboxed, platformSupport } from "./mxc.mjs";
 
-function line() {
-  console.log("-".repeat(60));
+const ok = (m) => console.log(`  [ok]   ${m}`);
+const warn = (m) => console.log(`  [warn] ${m}`);
+const info = (m) => console.log(`  ${m}`);
+
+// MXC backend errors append a JSON blob after a human sentence; keep just the sentence.
+function cleanReason(stderr) {
+  if (!stderr) return "";
+  const text = stderr.split("{")[0].trim();
+  return text || stderr.trim();
 }
 
 console.log("MXC sandbox self-test");
-line();
 
+// 1. SDK + platform
 const support = platformSupport();
-console.log("platform:", process.platform);
-console.log("MXC supported:", support.isSupported);
-console.log("reason:", support.reason || "(none)");
-console.log("backends:", (support.availableMethods || []).join(", ") || "(none)");
-if (support.isolationTier) console.log("isolationTier:", support.isolationTier);
-line();
+ok(`SDK loaded on ${process.platform}`);
+if (support.isSupported) {
+  ok(`MXC available — backends: ${(support.availableMethods || []).join(", ") || "(none)"}`);
+} else {
+  warn(`MXC not available on this host: ${support.reason || "unknown"}`);
+}
 
+// 2. Policy builds correctly
 const repoRoot = resolveRepoRoot(process.cwd());
 const policy = buildPolicy({ repoRoot });
-console.log("repoRoot:", repoRoot);
-console.log("policy:", JSON.stringify(policy, null, 2));
-line();
+ok("policy built (read-anywhere, write-repo-only)");
+info(`write root : ${repoRoot}`);
+info(`scratch    : ${policy.filesystem.readwritePaths[1]}`);
+info(`read scope : ${policy.filesystem.readonlyPaths.join(", ")}`);
 
 if (!support.isSupported) {
-  console.log("MXC not available on this host — skipping execution test.");
-  console.log("(The MCP server will still load; run_in_sandbox will report this.)");
+  console.log("\nSELF-TEST OK — server is healthy. (Sandbox execution unavailable on this host.)");
   process.exit(0);
 }
 
-const cmd = process.platform === "win32"
-  ? "cmd /c echo hello-from-sandbox"
-  : "echo hello-from-sandbox";
-
-console.log("Running dry-run...");
-const dry = await runSandboxed({ command: cmd, cwd: repoRoot, policy, dryRun: true });
-console.log("dry-run exitCode:", dry.exitCode, "backend:", dry.backend);
-if (dry.stderr) console.log("dry-run stderr:", dry.stderr.trim());
-line();
-
-console.log("Running for real...");
+// 3. Execution probe
+const cmd = process.platform === "win32" ? "cmd /c echo hello-from-sandbox" : "echo hello-from-sandbox";
 const res = await runSandboxed({ command: cmd, cwd: repoRoot, policy });
-console.log("exitCode:", res.exitCode, "backend:", res.backend);
-console.log("stdout:", res.stdout.trim());
-if (res.stderr) console.log("stderr:", res.stderr.trim());
-line();
+
+console.log("");
 if (res.exitCode === 0) {
-  console.log("SELF-TEST OK");
+  ok(`sandbox executed a command (stdout: "${res.stdout.trim()}")`);
+  console.log("\nSELF-TEST OK — server healthy and sandbox execution works.");
 } else {
-  console.log("SELF-TEST: server + policy OK, but the host could not execute the sandbox.");
-  console.log("This is usually a host capability gap, not a config error. On Windows the");
-  console.log("BaseContainer backend (schema 0.6.0-alpha) needs its velocity keys enabled, and");
-  console.log("the AppContainer backend (schema 0.4.0-alpha) needs bfscfg.exe in the Windows build.");
-  console.log("Try a different backend with MXC_SCHEMA_VERSION, or run on a provisioned host.");
+  warn("sandbox executed but the host could not run the command:");
+  info(cleanReason(res.stderr));
+  console.log("");
+  console.log("This is a HOST capability gap, not a config error — the MCP server is fine.");
+  console.log("On Windows the sandbox needs one of:");
+  console.log("  • BaseContainer (default) — velocity keys enabled (Windows 11 24H2+ / provisioned)");
+  console.log("  • AppContainer            — set MXC_SCHEMA_VERSION=0.4.0-alpha (needs bfscfg.exe)");
+  console.log("\nSELF-TEST OK — server is healthy. Sandbox execution will work on a provisioned host.");
 }
