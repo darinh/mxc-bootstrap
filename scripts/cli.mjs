@@ -230,7 +230,8 @@ ${bold("Commands:")}
   ${cyan("profiles")}                List available identities (profiles) and what they permit.
   ${cyan("register")} [harness...]   Register a global broker with agents (no repo binding).
                             ${dim("No args -> interactive menu. e.g. mxc-bootstrap register copilot")}
-  ${cyan("enable-backend")}          (Windows) Enable the BaseContainer backend the sandbox needs.
+  ${cyan("enable-backend")}          (Windows) Enable a containment backend the sandbox needs.
+                            ${dim("default: BaseContainer (ViVeTool).  -Backend windowssandbox: Windows Sandbox VM (DISM)")}
   ${cyan("selftest")}                Run the repo-agnostic health check (alias: ${dim("doctor")}).
   ${cyan("path")}                    Print the MCP server path (for manual config).
   ${cyan("server")}                  Run the MCP server on stdio (agents do this for you).

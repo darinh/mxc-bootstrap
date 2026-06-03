@@ -28,6 +28,7 @@ import {
   builtinDefaultProfile,
   buildPolicyFromProfile,
   assertConfigOutsideRoot,
+  resolveActiveBackend,
 } from "./policy.mjs";
 import { runSandboxed, platformSupport } from "./mxc.mjs";
 
@@ -162,7 +163,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const networkGranted = policy.network.allowOutbound === true;
 
       const dryRun = Boolean(args.dryRun);
-      const result = await runSandboxed({ command, cwd, policy, dryRun });
+      const backend = resolveActiveBackend();
+      const result = await runSandboxed({
+        command,
+        cwd,
+        policy: { ...policy, version: backend.version },
+        dryRun,
+        containment: backend.containment,
+        experimental: backend.experimental,
+      });
 
       return textResult(
         {

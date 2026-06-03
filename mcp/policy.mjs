@@ -39,9 +39,7 @@ export function saveInstallConfig(patch, installDir = INSTALL_DIR) {
   return file;
 }
 
-// Resolve the policy schema version (which selects the Windows containment backend):
-//   "0.6.0-alpha" -> BaseContainer (needs the BaseContainer velocity keys enabled)
-//   "0.4.0-alpha" -> AppContainer  (needs bfscfg.exe / BFS support in the Windows build)
+// Resolve the policy schema version (which pins the SDK policy schema for the active backend).
 // Precedence: MXC_SCHEMA_VERSION env > persisted config.json (set by the health check) > default.
 export function schemaVersion() {
   return (
@@ -51,16 +49,76 @@ export function schemaVersion() {
   );
 }
 
-// The schema versions worth probing on this OS, most-preferred first. Only Windows has more than
-// one selectable containment backend; elsewhere the single native backend is used as-is.
-export function candidateSchemaVersions() {
-  if (process.platform !== "win32") return [schemaVersion()];
-  const seen = new Set();
-  return [schemaVersion(), "0.6.0-alpha", "0.4.0-alpha"].filter((v) => {
-    if (seen.has(v)) return false;
-    seen.add(v);
-    return true;
-  });
+// Windows offers more than one selectable containment backend. Each descriptor pairs the SDK
+// containment intent/backend with the policy schema version it expects, whether spawning needs
+// the experimental flag, and the `getPlatformSupport().availableMethods` name used to gate it.
+// Ordered most-preferred first.
+//
+//   process          -> BaseContainer     (needs the BaseContainer velocity keys enabled)
+//   windows_sandbox  -> Windows Sandbox VM (needs the Containers-DisposableClientVM feature)
+//
+// The legacy AppContainer/BFS backend (schema 0.4.0-alpha, bfscfg.exe) was removed from the
+// MXC SDK, so it is intentionally no longer probed here.
+const WINDOWS_BACKENDS = [
+  {
+    containment: "process",
+    version: "0.6.0-alpha",
+    experimental: false,
+    label: "BaseContainer",
+    method: "processcontainer",
+  },
+  {
+    containment: "windows_sandbox",
+    version: "0.5.0-alpha",
+    experimental: true,
+    label: "Windows Sandbox (VM)",
+    method: "windows_sandbox",
+  },
+];
+
+function nativeBackend() {
+  // Non-Windows platforms expose a single native backend selected by the SDK from the
+  // abstract "process" intent (bubblewrap/lxc on Linux, seatbelt on macOS).
+  return { containment: "process", version: schemaVersion(), experimental: false, label: "native", method: null };
+}
+
+/**
+ * The containment backend the broker should use at run time.
+ * Precedence: MXC_CONTAINMENT env > persisted config.json (set by the health check) > default.
+ */
+export function resolveActiveBackend() {
+  if (process.platform !== "win32") return nativeBackend();
+  const containment =
+    process.env.MXC_CONTAINMENT?.trim() || loadInstallConfig().containment || "process";
+  const desc = WINDOWS_BACKENDS.find((b) => b.containment === containment);
+  // Each backend pins its own canonical schema version (BaseContainer 0.6.0-alpha,
+  // Windows Sandbox VM 0.5.0-alpha). An explicit MXC_SCHEMA_VERSION is the escape hatch;
+  // otherwise the descriptor's version wins so a runtime override (e.g. MXC_CONTAINMENT=
+  // windows_sandbox) uses the same schema the health check verified — not the default.
+  const version =
+    process.env.MXC_SCHEMA_VERSION?.trim() || (desc ? desc.version : schemaVersion());
+  return {
+    containment,
+    version,
+    experimental: desc ? desc.experimental : false,
+    label: desc ? desc.label : containment,
+    method: desc ? desc.method : null,
+  };
+}
+
+// The containment backends worth probing on this OS, most-preferred first (the persisted/active
+// one leads). Each candidate carries its own canonical schema version; an explicit
+// MXC_SCHEMA_VERSION override is applied only to the preferred candidate (the escape hatch).
+export function candidateBackends() {
+  if (process.platform !== "win32") return [nativeBackend()];
+  const active = resolveActiveBackend();
+  const ordered = [
+    ...WINDOWS_BACKENDS.filter((b) => b.containment === active.containment),
+    ...WINDOWS_BACKENDS.filter((b) => b.containment !== active.containment),
+  ].map((b) => ({ ...b }));
+  const envVersion = process.env.MXC_SCHEMA_VERSION?.trim();
+  if (envVersion && ordered.length) ordered[0] = { ...ordered[0], version: envVersion };
+  return ordered;
 }
 
 /** Drive/filesystem roots that should be readable. On Windows this is the repo's drive
