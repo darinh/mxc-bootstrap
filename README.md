@@ -110,7 +110,7 @@ identity that resolves for your current directory.
 | `profiles` | List available identities and what they permit. |
 | `register [harness…]` | Register a global broker with agents (no repo binding). No args = menu. |
 | `selftest` | Repo-agnostic health check (alias `doctor`). |
-| `enable-backend` | (Windows) Enable the BaseContainer backend via ViVeTool. `-Disable` reverts. |
+| `enable-backend` | (Windows) Enable a containment backend the sandbox needs. Default enables BaseContainer via ViVeTool; `-Backend windowssandbox` enables the Windows Sandbox VM. `-Disable` reverts. |
 | `path` | Print the MCP server path (for manual config). |
 | `server` | Run the MCP server on stdio (agents do this for you). |
 
@@ -156,7 +156,8 @@ Day-to-day you pick behavior via **profiles**, not env vars. These remain for pi
 | `MXC_REPO_ROOT` | Pin the trusted writable repo root. If unset, taken from MCP roots or the server's launch dir — never the agent. |
 | `MXC_PROFILES_DIR` | Override the profiles directory (default `~/.mxc/profiles`). |
 | `MXC_FORCE_NO_NETWORK` | `1` is a machine-level kill switch: forces network off even for a `network` profile. |
-| `MXC_SCHEMA_VERSION` | Policy schema / Windows backend selector. `0.6.0-alpha` (default) = BaseContainer; `0.4.0-alpha` = AppContainer. |
+| `MXC_SCHEMA_VERSION` | Pin the policy schema version handed to the SDK. Defaults to the active backend's canonical schema (BaseContainer `0.6.0-alpha`, Windows Sandbox VM `0.5.0-alpha`); set this only to override that. It does **not** select the backend — use `MXC_CONTAINMENT` for that. |
+| `MXC_CONTAINMENT` | Pin the Windows containment backend: `process` (BaseContainer) or `windows_sandbox` (VM). Overrides the persisted `config.json` choice. |
 | `MXC_TIMEOUT_MS` | Max sandbox runtime before the broker kills the command. Default `600000` (10 min); `0` = no limit. |
 | `MXC_MAX_OUTPUT` | Max captured bytes per stream before output is truncated. Default `5000000`. |
 
@@ -186,17 +187,32 @@ server uses it automatically — no env var needed).
 
 | OS | Backend | Requirement |
 |----|---------|-------------|
-| Windows | BaseContainer (`0.6.0-alpha`) | The BaseContainer feature enabled (Windows 11 24H2+). Run `mxc-bootstrap enable-backend` to turn it on via ViVeTool (admin + reboot) |
-| Windows | AppContainer (`0.4.0-alpha`) | A Windows build that ships `bfscfg.exe` (BFS support) |
+| Windows | BaseContainer (`0.6.0-alpha`) | The BaseContainer velocity feature flags enabled (Windows 11 24H2+, on a build that implements the API). Run `mxc-bootstrap enable-backend` to turn them on via ViVeTool (admin + reboot) |
+| Windows | Windows Sandbox VM (`0.5.0-alpha`) | The `Containers-DisposableClientVM` optional feature + hardware virtualization. Run `mxc-bootstrap enable-backend -Backend windowssandbox` to enable it via DISM (admin + reboot) |
 | Linux | bubblewrap | `bwrap` installed (or `lxc`) |
 | macOS | seatbelt | `/usr/bin/sandbox-exec` (built in); runs with the experimental flag |
+
+> The legacy AppContainer/BFS backend (`0.4.0-alpha`, `bfscfg.exe`) was removed from the MXC SDK and
+> is no longer probed or supported.
+
+> ⚠️ **Known limitation — BaseContainer is not functional on current stable Windows (Windows 11 25H2,
+> build 26200).** On this build the BaseContainer velocity feature flags can be successfully enabled
+> (ViVeTool reports them `Enabled`), but the underlying OS API is unimplemented: spawning a container
+> returns `E_NOTIMPL` / `ERROR_CALL_NOT_IMPLEMENTED`. The "velocity keys not enabled" message some
+> tooling prints in this case is misleading — the flags *are* set; the build simply doesn't implement
+> the API. Until a Windows build ships the implementation, use the **Windows Sandbox VM** backend
+> (`-Backend windowssandbox`) or run the server inside **WSL2** (bubblewrap) instead.
 
 If **no** backend works, the health check says so plainly and explains why — your install is still
 complete. On Windows, machine setup offers to enable the BaseContainer backend for you (or run
 `mxc-bootstrap enable-backend` later); this installs [ViVeTool](https://github.com/thebookisclosed/ViVe)
 via winget, flips the BaseContainer feature flags, and prompts for a reboot (reversible with
-`mxc-bootstrap enable-backend -Disable`). After rebooting, run `mxc-bootstrap selftest` to confirm and
-persist the choice. You can also force a specific schema with `MXC_SCHEMA_VERSION`.
+`mxc-bootstrap enable-backend -Disable`). If you've already enabled those flags and rebooted but the
+selftest still reports BaseContainer unavailable, your Windows build likely doesn't implement that API —
+enable the Windows Sandbox VM backend instead with `mxc-bootstrap enable-backend -Backend windowssandbox`.
+After rebooting, run `mxc-bootstrap selftest` to confirm and persist the choice. You can also force a
+specific backend with `MXC_CONTAINMENT` (e.g. `MXC_CONTAINMENT=windows_sandbox`); this runs the backend
+without re-probing, so prefer letting the selftest verify and persist it first.
 
 ## License
 
